@@ -1,9 +1,8 @@
 /.vscode
 /client
-/client.cpp
-/httplib.h
+/server
+
 /lgclient
-/lgclient.cpp
+
 /loadgenerator
-/loadgenerator.cpp
-/server.cpp
+
