@@ -110,50 +110,39 @@ void *client_main(void *arg)
 {
     httplib::Client cli("localhost", 8080);
     int n = 1000;
-    string line;
     int cmd;
     int key = 0;
 
+    auto start = std::chrono::high_resolution_clock::now();
     while (n--)
     {
         cmd = rand() % 3;
-        key = rand() % 1000;
+        key = rand() % 1000000;
 
         if (cmd == 0)
         {
-            auto start = std::chrono::high_resolution_clock::now();
-
             create_key(cli);
-            auto end = std::chrono::high_resolution_clock::now();
-            std::chrono::duration<double, std::milli> elapsed = end - start;
-            pthread_mutex_lock(&mutex_lock);
-            latencies.push_back(elapsed.count());
-            pthread_mutex_unlock(&mutex_lock);
         }
         else if (cmd == 1)
         {
             auto start = std::chrono::high_resolution_clock::now();
 
             read_key(cli);
-            auto end = std::chrono::high_resolution_clock::now();
-            std::chrono::duration<double, std::milli> elapsed = end - start;
-            pthread_mutex_lock(&mutex_lock);
-            latencies.push_back(elapsed.count());
-            pthread_mutex_unlock(&mutex_lock);
         }
         else if (cmd == 2)
         {
             auto start = std::chrono::high_resolution_clock::now();
 
             delete_key(cli);
-            auto end = std::chrono::high_resolution_clock::now();
-            std::chrono::duration<double, std::milli> elapsed = end - start;
-            pthread_mutex_lock(&mutex_lock);
-            latencies.push_back(elapsed.count());
-            pthread_mutex_unlock(&mutex_lock);
         }
+
         // sleep(1);
     }
+    auto end = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double, std::milli> elapsed = end - start;
+    pthread_mutex_lock(&mutex_lock);
+    latencies.push_back(elapsed.count());
+    pthread_mutex_unlock(&mutex_lock);
 
     return 0;
 }
@@ -172,19 +161,11 @@ int main()
     {
         pthread_join(threads[i], nullptr);
     }
-    double total = 0;
-    for (double t : latencies)
-        total += t;
-    double avg = total / latencies.size();
-    cout << "Average latency: " << avg << " ms" << endl;
-    cout << "Total requests: " << latencies.size() << endl;
 
-    double throughput = (latencies.size() / (total / 1000.0)) ; // roughly
-    cout << "Approx throughput: " << throughput << " req/sec" << endl;
-    // for (double t : latencies)
-    // {
-    //     cout << "time (ms): " << t << endl;
-    // }
+    for (double t : latencies)
+    {
+        cout << "time (ms): " << t << endl;
+    }
 
     return 0;
 }
