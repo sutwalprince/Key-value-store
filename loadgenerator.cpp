@@ -8,54 +8,52 @@ pthread_mutex_t mutex_lock;
 void generate_value(int n, string &value)
 {
     value.clear();
-    for (int i = 0; i < n; ++i)
+    for (int i = 0; i < n; i++)
     {
         char c = 'a' + rand() % 26;
         value += c;
     }
 }
 
-vector<double> latencies;
+vector<double> timeArr;
 
 void create_key(httplib::Client &cli)
 {
+
+    string key;
+    string value;
+    int size;
+
+    key = to_string(rand() % 1000);
+    size = (rand() % 20) + 1;
+    generate_value(size, value);
+
+    if (value.size() != size)
     {
+        cout << "Value size does not match." << endl;
+        return;
+    }
 
-        string key;
-        string value;
-        int size;
+    string body = "key=" + key + "&size=" + to_string(size) + "&value=" + value;
 
-        key = to_string(rand() % 1000);
-        size = rand() % 20 + 1;
-        generate_value(size, value);
-
-        if (value.size() != size)
+    if (auto res = cli.Post("/", body, "application/x-www-form-urlencoded"))
+    {
+        if (res->status == httplib::StatusCode::OK_200)
         {
-            cout << "Value size does not match." << endl;
-            return;
-        }
-        string body = "key=" + key + "&size=" + to_string(size) + "&value=" + value;
-
-        if (auto res = cli.Post("/", body, "application/x-www-form-urlencoded"))
-        {
-            if (res->status == httplib::StatusCode::OK_200)
+            if (res->body == "OK")
             {
-                // std::cout << res->body << std::endl;
-                if (res->body == "OK")
-                {
-                    cout << "key-value pair created ." << endl;
-                }
-                else
-                {
-                    std::cout << res->body << std::endl;
-                }
+                cout << "key-value pair created ." << endl;
+            }
+            else
+            {
+                std::cout << res->body << std::endl;
             }
         }
-        else
-        {
-            auto err = res.error();
-            std::cout << "HTTP error: " << httplib::to_string(err) << std::endl;
-        }
+    }
+    else
+    {
+        auto err = res.error();
+        std::cout << "HTTP error: " << httplib::to_string(err) << std::endl;
     }
 }
 
@@ -63,6 +61,7 @@ void read_key(httplib::Client &cli)
 {
     string key;
     key = to_string(rand() % 1000);
+
     if (auto res = cli.Get("/" + key))
     {
         if (res->status == httplib::StatusCode::OK_200)
@@ -86,6 +85,7 @@ void delete_key(httplib::Client &cli)
 {
     string key;
     key = to_string(rand() % 1000);
+
     if (auto res = cli.Delete("/" + key))
     {
         if (res->status == httplib::StatusCode::OK_200)
@@ -121,18 +121,16 @@ void *client_main(void *arg)
 
         if (cmd == 0)
         {
+
             create_key(cli);
         }
         else if (cmd == 1)
         {
-            auto start = std::chrono::high_resolution_clock::now();
 
-            read_key(cli);
+            read_key(cli); 
         }
         else if (cmd == 2)
         {
-            auto start = std::chrono::high_resolution_clock::now();
-
             delete_key(cli);
         }
 
@@ -141,7 +139,7 @@ void *client_main(void *arg)
     auto end = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double, std::milli> elapsed = end - start;
     pthread_mutex_lock(&mutex_lock);
-    latencies.push_back(elapsed.count());
+    timeArr.push_back(elapsed.count());
     pthread_mutex_unlock(&mutex_lock);
 
     return 0;
@@ -151,6 +149,7 @@ int main()
 {
 
     pthread_t threads[MAX_THREADS];
+    auto start = std::chrono::high_resolution_clock::now();
 
     for (int i = 0; i < MAX_THREADS; ++i)
     {
@@ -162,7 +161,10 @@ int main()
         pthread_join(threads[i], nullptr);
     }
 
-    for (double t : latencies)
+    auto end = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double, std::milli> elapsed = end - start;
+    cout << "Total time (ms): " << elapsed.count() << endl;
+    for (double t : timeArr)
     {
         cout << "time (ms): " << t << endl;
     }

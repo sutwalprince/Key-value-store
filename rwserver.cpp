@@ -5,7 +5,7 @@
 // #define CACHE_CAPACITY 10
 #define MAX_THREADS 8
 
-pthread_mutex_t lock;
+pthread_rwlock_t lock;
 
 class LRUCache
 {
@@ -224,14 +224,12 @@ PGconn *connect_to_db()
 int main(int argc, char *argv[])
 {
     int CACHE_CAPACITY = argc > 1 ? std::stoi(argv[1]) : 100;
-    // pthread_mutex_lock(&lock);
     PGconn *conn = connect_to_db();
     if (!conn)
     {
         return 1;
     }
     create_table_if_not_exists(conn);
-    // pthread_mutex_unlock(&lock);
     LRUCache kv_cache(CACHE_CAPACITY);
 
     using namespace httplib;
@@ -250,16 +248,16 @@ int main(int argc, char *argv[])
         res.set_content("Value size mismatch", "text/plain");
         return;
     }
-    pthread_mutex_lock(&lock);
+    pthread_rwlock_wrlock(&lock);
     if (kv_cache.exists(key))
     {
-        pthread_mutex_unlock(&lock);
+        pthread_rwlock_unlock(&lock);
         res.set_content("Key already exists", "text/plain");
         return;
     }
     if (key_exists_in_db(conn, key))
     {
-        pthread_mutex_unlock(&lock);
+        pthread_rwlock_unlock(&lock);
         res.set_content("Key already exists", "text/plain");
         return;
     }
@@ -267,46 +265,46 @@ int main(int argc, char *argv[])
 
     if (save_key_to_db(conn, key, value) != 1)
     {
-        pthread_mutex_unlock(&lock);
+        pthread_rwlock_unlock(&lock);
         res.set_content("Failed to save to database", "text/plain");
         return;
     }
     kv_cache.put(key, value);
     // all_keys_in_db(conn);
     // kv_cache.print();
-    pthread_mutex_unlock(&lock);
+    pthread_rwlock_unlock(&lock);
     res.set_content("OK", "text/plain"); });
 
-    svr.Get(R"(/(\d+))", [&kv_cache, conn](const Request &req, Response &res)
+    svr.Get(R"(/(\d+))", [&](const Request &req, Response &res)
             {
     auto numbers = req.matches[1];
     int key = std::stoi(numbers);
     std::string value;
-    pthread_mutex_lock(&lock);
+    pthread_rwlock_rdlock(&lock);
     if (kv_cache.get(key, value) == false)
     {
         if (search_key_in_db(conn, key, value) != 1)
         {
-            pthread_mutex_unlock(&lock);
+            pthread_rwlock_unlock(&lock);
             res.set_content("-1", "text/plain");
             return;
         }
         kv_cache.put(key, value);
     }
     // kv_cache.print();
-    pthread_mutex_unlock(&lock);
+    pthread_rwlock_unlock(&lock);
     res.set_content(value, "text/plain"); });
 
     svr.Delete(R"(/(\d+))", [&kv_cache, conn](const Request &req, Response &res)
                {
     auto numbers = req.matches[1];
     int key = std::stoi(numbers);
-    pthread_mutex_lock(&lock);
+    pthread_rwlock_wrlock(&lock);
     if (!kv_cache.exists(key))
     {
         if (!key_exists_in_db(conn, key))
         {
-            pthread_mutex_unlock(&lock);
+            pthread_rwlock_unlock(&lock);
             res.set_content("-1", "text/plain");
             return;
         }
@@ -314,22 +312,21 @@ int main(int argc, char *argv[])
     kv_cache.delete_key(key);
     if (delete_key_from_db(conn, key) != 1)
     {
-        pthread_mutex_unlock(&lock);
+        pthread_rwlock_unlock(&lock);
         res.set_content("Failed to delete from database", "text/plain");
         return;
     }
     // all_keys_in_db(conn);
     // kv_cache.print();
-    pthread_mutex_unlock(&lock);
+    pthread_rwlock_unlock(&lock);
     res.set_content("OK", "text/plain"); });
 
     svr.Get("/stop", [&](const Request &, Response &res)
             {
     PQfinish(conn);
     res.set_content("Server stopping", "text/plain");
-    svr.stop();
-    pthread_mutex_destroy(&lock); });
-
+    svr.stop(); });
+    
     svr.new_task_queue = []
     { return new ThreadPool(MAX_THREADS); };
 
@@ -337,5 +334,6 @@ int main(int argc, char *argv[])
     {
         std::cout << "server listening on port 8080" << std::endl;
     }
+    pthread_rwlock_destroy(&lock);
     return 0;
 }
