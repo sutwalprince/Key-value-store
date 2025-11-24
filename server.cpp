@@ -1,7 +1,10 @@
-#include "./httplib.h"
-#include <bits/stdc++.h>
-#include "/usr/include/postgresql/libpq-fe.h"
+#include <iostream>
+#include <string>
+#include <list>
+#include <unordered_map>
 #include <mutex>
+#include "httplib.h"
+#include "/usr/include/postgresql/libpq-fe.h"
 // #define CACHE_CAPACITY 10
 #define MAX_THREADS 8
 
@@ -44,7 +47,7 @@ public:
     {
         if (!exists(key))
             return false;
-        value = kv_store[key].first;
+        value = kv_store[key].first + " (from cache)";
         cache.erase(kv_store[key].second);
         cache.push_front(key);
         kv_store[key].second = cache.begin();
@@ -68,24 +71,46 @@ public:
     }
 };
 
+thread_local PGconn *thread_conn = nullptr;
+
+PGconn *get_thread_connection()
+{
+    if (thread_conn == nullptr)
+    {
+        thread_conn = PQconnectdb(
+            "host=localhost port=5432 dbname=kvstore user=kvuser password=1234");
+
+        if (PQstatus(thread_conn) != CONNECTION_OK)
+        {
+            std::cerr << "[DB] Connection failed in thread: "
+                      << PQerrorMessage(thread_conn);
+            PQfinish(thread_conn);
+            thread_conn = nullptr;
+            return nullptr;
+        }
+        std::cout << "[DB] Thread created new PGconn thread id : " << std::this_thread::get_id() << "\n";
+    }
+    return thread_conn;
+}
+
 int save_key_to_db(PGconn *conn, const int key, const std::string &value)
 {
     std::string key_str = std::to_string(key);
     const char *param_values[] = {key_str.c_str(), value.c_str()};
 
     PGresult *r = PQexecParams(conn,
-                               "INSERT INTO kv_store (key, value) VALUES ($1, $2);",
+                               "INSERT INTO kv_store (key, value) VALUES ($1, $2) ;",
                                2,
                                NULL,
                                param_values,
                                NULL, NULL, 0);
     if (PQresultStatus(r) != PGRES_COMMAND_OK)
     {
-        std::cerr << "INSERT failed: " << PQerrorMessage(conn);
+        // std::cerr << "INSERT failed: " << PQerrorMessage(conn);
         PQclear(r);
         return 0;
     }
-    PQclear(r);
+    PQclear(r) ;
     return 1;
 }
 
@@ -203,6 +228,18 @@ void create_table_if_not_exists(PGconn *conn)
         std::cerr << "CREATE TABLE failed: " << PQerrorMessage(conn);
         PQclear(r);
     }
+    // PQclear(r);
+    
+    // r = PQexecParams(conn,
+    //                  "TRUNCATE TABLE kv_store;",
+    //                  0,
+    //                  NULL,
+    //                  NULL,
+    //                  NULL, NULL, 0);
+    // if (PQresultStatus(r) != PGRES_COMMAND_OK)
+    // {
+    //     std::cerr << "TRUNCATE TABLE failed: " << PQerrorMessage(conn);
+    // }
     PQclear(r);
 }
 
@@ -223,15 +260,15 @@ PGconn *connect_to_db()
 
 int main(int argc, char *argv[])
 {
+    pthread_mutex_init(&lock, NULL);
     int CACHE_CAPACITY = argc > 1 ? std::stoi(argv[1]) : 100;
-    // pthread_mutex_lock(&lock);
+
     PGconn *conn = connect_to_db();
     if (!conn)
     {
         return 1;
     }
     create_table_if_not_exists(conn);
-    // pthread_mutex_unlock(&lock);
     LRUCache kv_cache(CACHE_CAPACITY);
 
     using namespace httplib;
@@ -241,64 +278,69 @@ int main(int argc, char *argv[])
     svr.Get("/hi", [](const Request &req, Response &res)
             { res.set_content("Hello World!", "text/plain"); });
 
-    svr.Post("/", [&kv_cache, conn](const Request &req, Response &res)
+    svr.Post("/", [&kv_cache](const Request &req, Response &res)
              {
+                PGconn *conn = get_thread_connection();
+    if (!conn)
+    {
+        res.status = 500;
+        res.set_content("DB connection failed", "text/plain");
+        return;
+    }
     int key = std::stoi(req.get_param_value("key"));
-    int size = std::stoi(req.get_param_value("size"));
+
     std::string value = req.get_param_value("value");
-    if (value.size() != size) {
-        res.set_content("Value size mismatch", "text/plain");
-        return;
-    }
-    pthread_mutex_lock(&lock);
-    if (kv_cache.exists(key))
-    {
-        pthread_mutex_unlock(&lock);
-        res.set_content("Key already exists", "text/plain");
-        return;
-    }
-    if (key_exists_in_db(conn, key))
-    {
-        pthread_mutex_unlock(&lock);
-        res.set_content("Key already exists", "text/plain");
-        return;
-    }
-
-
+    
     if (save_key_to_db(conn, key, value) != 1)
     {
-        pthread_mutex_unlock(&lock);
         res.set_content("Failed to save to database", "text/plain");
         return;
+    }else{
+        pthread_mutex_lock(&lock);
+        kv_cache.put(key, value);
+        pthread_mutex_unlock(&lock);
     }
-    kv_cache.put(key, value);
-    // all_keys_in_db(conn);
-    // kv_cache.print();
-    pthread_mutex_unlock(&lock);
+  
     res.set_content("OK", "text/plain"); });
 
-    svr.Get(R"(/(\d+))", [&kv_cache, conn](const Request &req, Response &res)
+    svr.Get(R"(/(\d+))", [&kv_cache](const Request &req, Response &res)
             {
+    PGconn *conn = get_thread_connection();
+    if (!conn)
+    {
+        res.status = 500;
+        res.set_content("DB connection failed", "text/plain");
+        return;
+    }
     auto numbers = req.matches[1];
     int key = std::stoi(numbers);
     std::string value;
     pthread_mutex_lock(&lock);
     if (kv_cache.get(key, value) == false)
     {
+    pthread_mutex_unlock(&lock);
+
         if (search_key_in_db(conn, key, value) != 1)
         {
             pthread_mutex_unlock(&lock);
             res.set_content("-1", "text/plain");
             return;
         }
+        pthread_mutex_lock(&lock);
         kv_cache.put(key, value);
     }
-    // kv_cache.print();
     pthread_mutex_unlock(&lock);
     res.set_content(value, "text/plain"); });
 
-    svr.Delete(R"(/(\d+))", [&kv_cache, conn](const Request &req, Response &res)
+    svr.Delete(R"(/(\d+))", [&kv_cache](const Request &req, Response &res)
                {
+    PGconn *conn = get_thread_connection();
+    if (!conn)
+    {
+        res.status = 500;
+        res.set_content("DB connection failed", "text/plain");
+        return;
+    }
     auto numbers = req.matches[1];
     int key = std::stoi(numbers);
     pthread_mutex_lock(&lock);
@@ -328,12 +370,14 @@ int main(int argc, char *argv[])
     PQfinish(conn);
     res.set_content("Server stopping", "text/plain");
     svr.stop();
+    PQfinish(conn);
     pthread_mutex_destroy(&lock); });
 
     svr.new_task_queue = []
     { return new ThreadPool(MAX_THREADS); };
 
-    if (svr.listen("localhost", 8080))
+    // if (svr.listen("localhost", 8080))
+    if (svr.listen("0.0.0.0", 8080))
     {
         std::cout << "server listening on port 8080" << std::endl;
     }

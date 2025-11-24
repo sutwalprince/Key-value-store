@@ -1,8 +1,6 @@
-#include "./httplib.h"
-#include <iostream>
-#include <bits/stdc++.h>
+#include "pch.h"
 using namespace std;
-#define MAX_THREADS 10
+
 
 pthread_mutex_t mutex_lock;
 void generate_value(int n, string &value)
@@ -24,7 +22,7 @@ void create_key(httplib::Client &cli)
     string value;
     int size;
 
-    key = to_string(rand() % 1000);
+    key = to_string(rand() % 100000);
     size = (rand() % 20) + 1;
     generate_value(size, value);
 
@@ -145,9 +143,14 @@ void *client_main(void *arg)
     return 0;
 }
 
-int main()
+int main(int argc, char **argv)
 {
 
+    int MAX_THREADS = 10;
+    if(argc > 1)
+    {
+        int MAX_THREADS = stoi(argv[1]);
+    }
     pthread_t threads[MAX_THREADS];
     auto start = std::chrono::high_resolution_clock::now();
 
