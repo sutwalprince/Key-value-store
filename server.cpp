@@ -293,7 +293,7 @@ int main(int argc, char *argv[])
     
     if (save_key_to_db(conn, key, value) != 1)
     {
-        res.set_content("Failed to save to database", "text/plain");
+        res.set_content("Already in database.", "text/plain");
         return;
     }else{
         pthread_mutex_lock(&lock);
@@ -353,7 +353,7 @@ int main(int argc, char *argv[])
             return;
         }
     }
-    kv_cache.delete_key(key);
+    kv_cache.delete_key(key) ;
     if (delete_key_from_db(conn, key) != 1)
     {
         pthread_mutex_unlock(&lock);
